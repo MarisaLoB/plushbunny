@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Plush Bunny</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="An interactive WebGPU plush bunny. Pet her, give her a squeeze, pick her up and set her down.">
+<style>
+/* Layout: one-screen stage. The canvas fills it; editorial labels sit in the corners and never cover the bunny. */
+:root{
+  --bg:#F7F2EC;        /* warm off-white, lets the oatmeal fur read */
+  --bg-glow:#FFFDFA;
+  --ink:#2B2420;
+  --muted:#7B6E66;
+  --accent:#B0606A;    /* felt-nose rose, deepened for text */
+  --tag:#FFFFFF;
+  --tag-ink:#2B2420;
+  --line:rgba(43,36,32,.16);
+  --display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua","URW Palladio L",Georgia,serif;
+  --body:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#1C1816; --bg-glow:#2B2521; --ink:#F3ECE6; --muted:#ABA097; --accent:#E9A2A8;
+    --tag:#2A2522; --tag-ink:#EFE8E2; --line:rgba(243,236,230,.18); color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#1C1816; --bg-glow:#2B2521; --ink:#F3ECE6; --muted:#ABA097; --accent:#E9A2A8;
+  --tag:#2A2522; --tag-ink:#EFE8E2; --line:rgba(243,236,230,.18); color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);overflow:hidden;-webkit-font-smoothing:antialiased}
+.stage{position:fixed;inset:0;background:radial-gradient(110% 85% at 50% 44%,var(--bg-glow) 0%,var(--bg) 70%)}
+body.transparent,body.transparent .stage{background:transparent}
+#gl{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;opacity:0;transition:opacity .6s ease}
+#gl.ready{opacity:1}
+body.embed #gl{touch-action:pan-y}
+
+.loading{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);pointer-events:none}
+.loading i{display:block;width:120px;height:2px;margin:12px auto 0;background:var(--line);overflow:hidden;border-radius:2px}
+.loading i b{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+
+.ui{
+  position:absolute;inset:0;pointer-events:none;display:grid;grid-template-rows:auto 1fr auto;
+  padding-top:calc(env(safe-area-inset-top,0px) + clamp(16px,3.2vw,40px));
+  padding-bottom:calc(env(safe-area-inset-bottom,0px) + clamp(16px,3vw,36px));
+  padding-left:max(clamp(16px,3.4vw,44px),env(safe-area-inset-left,0px));
+  padding-right:max(clamp(16px,3.4vw,44px),env(safe-area-inset-right,0px));
+}
+body.no-ui .ui{display:none}
+.top,.bottom{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;min-width:0}
+.bottom{align-items:flex-end}
+.eyebrow,.meta,.hint{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+h1{
+  font-family:var(--display);font-weight:400;margin:.35em 0 0;line-height:.86;
+  font-size:clamp(44px,7.4vw,108px);letter-spacing:-.025em;text-wrap:balance;color:var(--ink)
+}
+h1 em{font-style:italic;color:var(--accent);padding-left:.04em}
+.lede{max-width:30ch;margin:14px 0 0;font-size:15px;line-height:1.5;color:var(--muted)}
+.meta{text-align:right;line-height:1.9}
+.meta b{font-weight:500;color:var(--ink)}
+
+.tag{
+  pointer-events:none;background:var(--tag);color:var(--tag-ink);font-family:var(--mono);font-size:11px;line-height:1.75;
+  padding:14px 16px 13px;border-radius:3px;transform:rotate(-2.2deg);transform-origin:left bottom;
+  box-shadow:0 1px 0 var(--line),0 10px 24px -14px rgba(0,0,0,.3);
+  outline:1px dashed var(--line);outline-offset:-6px;min-width:0
+}
+.tag .t{letter-spacing:.18em;font-size:10px;margin-bottom:6px;color:var(--accent)}
+.tag dl{display:grid;grid-template-columns:auto 1fr;gap:0 14px;margin:0}
+.tag dt{opacity:.6}
+.tag dd{margin:0}
+
+.actions{display:flex;flex-direction:column;align-items:flex-end;gap:12px;text-align:right}
+.hint{line-height:1.9;text-wrap:balance}
+.hint span{color:var(--ink)}
+button.reset{
+  pointer-events:auto;font:inherit;font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer;
+  color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:999px;padding:9px 16px;
+  transition:background .2s,border-color .2s,color .2s
+}
+button.reset:hover{border-color:var(--accent);color:var(--accent)}
+button.reset:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+.fallback{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding-inline:max(16px,env(safe-area-inset-left,0px))}
+.fallback img{width:min(300px,62vw);height:auto;display:block;margin:0 auto 14px}
+.fallback p{max-width:34ch;margin:8px auto 0;color:var(--muted);line-height:1.5}
+.fallback strong{font-family:var(--display);font-weight:400;font-size:28px;color:var(--ink)}
+
+@media (max-width:640px){
+  .tag,.lede,.meta{display:none}
+  .bottom{justify-content:center}
+  .actions{align-items:center;text-align:center}
+}
+@media (prefers-reduced-motion: reduce){ button.reset,#gl{transition:none} }
+</style>
+</head>
+<body>
+<div class="stage">
+  <canvas id="gl" tabindex="0" aria-label="Interactive 3D plush bunny. Pet her, hold to give her a squeeze, or drag to pick her up. Press R to sit her back down."></canvas>
+  <div class="loading" id="loading" aria-live="polite"><div>Unpacking her<i><b id="bar"></b></i></div></div>
+
+  <div class="fallback" id="fallback" hidden>
+    <div>
+      <img src="bunny-still.webp" alt="The plush bunny sitting with her long ears hanging down" width="600" height="600">
+      <strong>She needs WebGPU to move</strong>
+      <p id="fallbackMsg">This browser can't run WebGPU yet. Open the page in a recent Chrome, Edge or Safari to say hello.</p>
+    </div>
+  </div>
+
+  <div class="ui" id="ui">
+    <div class="top">
+      <div>
+        <div class="eyebrow">Soft goods study · Nº 03</div>
+        <h1>Plush<br><em>Bunny</em></h1>
+        <p class="lede">Oatmeal faux fur, black bead eyes, a felt nose and two long ears that sway when you pick her up.</p>
+      </div>
+      <div class="meta">
+        <div><b>WebGPU</b> · WGSL</div>
+        <div>40k triangles</div>
+        <div>Physics <b>240 Hz</b></div>
+      </div>
+    </div>
+    <div></div>
+    <div class="bottom">
+      <div class="tag" aria-hidden="true">
+        <div class="t">CARE LABEL</div>
+        <dl>
+          <dt>Shell</dt><dd>Oatmeal faux fur</dd>
+          <dt>Fill</dt><dd><span id="fillCount">24</span> particles, 2 clusters</dd>
+          <dt>Wash</dt><dd>Surface clean only</dd>
+          <dt>Handle</dt><dd>Gently, with both hands</dd>
+        </dl>
+      </div>
+      <div class="actions">
+        <div class="hint" id="hint"><span>Hover</span> to pet · <span>Hold</span> to squeeze · <span>Drag</span> to pick her up</div>
+        <button class="reset" id="reset" type="button">Sit her back down</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ------------------------------------------------------------------
+   Options:  ?embed   page-scroll friendly touch, no wheel zoom
+             ?ui=0    hide the editorial overlay
+             ?bg=transparent   transparent background
+             ?fur=0..8         force the number of fur layers
+------------------------------------------------------------------- */
+const params = new URLSearchParams(location.search);
+const EMBED = params.has('embed') && params.get('embed') !== '0';
+if (EMBED) document.body.classList.add('embed');
+if (params.get('ui') === '0') document.body.classList.add('no-ui');
+if (params.get('bg') === 'transparent') document.body.classList.add('transparent');
+const SHADOW = params.get('shadow') !== '0';
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const COARSE = matchMedia('(pointer: coarse)').matches;
+if (COARSE) document.getElementById('hint').innerHTML = '<span>Hold</span> to pet · <span>Drag</span> to pick her up · <span>Tap</span> to say hi';
+
+const canvas = document.getElementById('gl');
+const bar = document.getElementById('bar');
+
+/* ---------------- small math ---------------- */
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const scl=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const len=a=>Math.hypot(a[0],a[1],a[2]);
+const norm=a=>{const l=len(a)||1;return [a[0]/l,a[1]/l,a[2]/l]};
+const clamp=(x,a,b)=>x<a?a:x>b?b:x;
+const I3=()=>[1,0,0,0,1,0,0,0,1];
+const mv=(m,v)=>[m[0]*v[0]+m[3]*v[1]+m[6]*v[2],m[1]*v[0]+m[4]*v[1]+m[7]*v[2],m[2]*v[0]+m[5]*v[1]+m[8]*v[2]];
+function mm(a,b){const r=new Array(9);for(let c=0;c<3;c++)for(let i=0;i<3;i++)r[c*3+i]=a[i]*b[c*3]+a[3+i]*b[c*3+1]+a[6+i]*b[c*3+2];return r}
+const det3=m=>m[0]*(m[4]*m[8]-m[7]*m[5])-m[3]*(m[1]*m[8]-m[7]*m[2])+m[6]*(m[1]*m[5]-m[4]*m[2]);
+function inv3(m){const d=det3(m)||1e-12;const r=[
+  (m[4]*m[8]-m[7]*m[5]),-(m[1]*m[8]-m[7]*m[2]),(m[1]*m[5]-m[4]*m[2]),
+  -(m[3]*m[8]-m[6]*m[5]),(m[0]*m[8]-m[6]*m[2]),-(m[0]*m[5]-m[3]*m[2]),
+  (m[3]*m[7]-m[6]*m[4]),-(m[0]*m[7]-m[6]*m[1]),(m[0]*m[4]-m[3]*m[1])];return r.map(x=>x/d)}
+const tr3=m=>[m[0],m[3],m[6],m[1],m[4],m[7],m[2],m[5],m[8]];
+function qmat(q){const[x,y,z,w]=q;return[1-2*(y*y+z*z),2*(x*y+z*w),2*(x*z-y*w),2*(x*y-z*w),1-2*(x*x+z*z),2*(y*z+x*w),2*(x*z+y*w),2*(y*z-x*w),1-2*(x*x+y*y)]}
+const qmul=(a,b)=>[a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0],a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2]];
+const qnorm=q=>{const l=Math.hypot(q[0],q[1],q[2],q[3])||1;return[q[0]/l,q[1]/l,q[2]/l,q[3]/l]};
+const qaxis=(ax,ang)=>{const s=Math.sin(ang/2);return[ax[0]*s,ax[1]*s,ax[2]*s,Math.cos(ang/2)]};
+function qslerp(a,b,t){let d=a[0]*b[0]+a[1]*b[1]+a[2]*b[2]+a[3]*b[3];if(d<0){b=b.map(x=>-x);d=-d}
+  if(d>0.9995)return qnorm(a.map((x,i)=>x+(b[i]-x)*t));const th=Math.acos(d),s=Math.sin(th);
+  const wa=Math.sin((1-t)*th)/s,wb=Math.sin(t*th)/s;return a.map((x,i)=>x*wa+b[i]*wb)}
+function extractRotation(A,q){
+  for(let it=0;it<8;it++){
+    const R=qmat(q);
+    const o=add(add(cross([R[0],R[1],R[2]],[A[0],A[1],A[2]]),cross([R[3],R[4],R[5]],[A[3],A[4],A[5]])),cross([R[6],R[7],R[8]],[A[6],A[7],A[8]]));
+    const den=Math.abs(R[0]*A[0]+R[1]*A[1]+R[2]*A[2]+R[3]*A[3]+R[4]*A[4]+R[5]*A[5]+R[6]*A[6]+R[7]*A[7]+R[8]*A[8])+1e-9;
+    const w=len(o)/den; if(w<1e-9)break;
+    q=qnorm(qmul(qaxis(scl(o,1/len(o)),w),q));
+  }
+  return q;
+}
+const rotX=a=>{const c=Math.cos(a),s=Math.sin(a);return[1,0,0,0,c,s,0,-s,c]};
+const rotZ=a=>{const c=Math.cos(a),s=Math.sin(a);return[c,s,0,-s,c,0,0,0,1]};
+
+/* =================================================================
+   FEATURES of the model (scene units: she sits on y=0, faces +z, 1.76 tall)
+   ================================================================= */
+const EYE=[{c:[-0.175,1.4925,0.49],r:[0.036,0.042]},{c:[0.233,1.485,0.506],r:[0.036,0.042]}];
+const LID=[[200/255,170/255,144/255],[206/255,174/255,143/255]].map(c=>c.map(v=>Math.pow(v,2.2)*.84));
+const NOSE=[0.033,1.40,0.70];
+const EAR_PIVOT=[[0.4,1.6,0.12],[-0.4,1.6,0.12]]; // [right(+x), left]
+
+/* =================================================================
+   PARTICLES  (the stuffing that drives the skin)
+   ================================================================= */
+const PR=[], PRAD=[];
+const addP=(x,y,z,r)=>{PR.push([x,y,z]);PRAD.push(r);return PR.length-1};
+const B0=addP(0,.55,0,.3), B1=addP(.42,.5,0,.02), B2=addP(-.42,.5,0,.02), B3=addP(0,.6,.38,.02), B4=addP(0,.55,-.42,.02), B5=addP(0,.04,0,.04);
+const C0=addP(.38,.15,.55,.13), C1=addP(-.38,.15,.55,.13), C2=addP(.3,.1,-.25,.1), C3=addP(-.3,.1,-.25,.1);
+const A0=addP(.3,.55,.45,.02), A1=addP(-.3,.55,.45,.02);
+const N0=addP(0,1.0,.1,.12), N1=addP(.28,.95,.15,.02), N2=addP(-.28,.95,.15,.02);
+const H0=addP(0,1.38,.2,.3), H1=addP(.42,1.38,.2,.02), H2=addP(-.42,1.38,.2,.02), H3=addP(0,1.74,.15,.02),
+      H4=addP(0,1.38,.7,.02), H5=addP(0,1.4,-.2,.02), H6=addP(.25,1.6,.45,.02), H7=addP(-.25,1.6,.45,.02);
+const NP=PR.length;
+document.getElementById('fillCount').textContent=NP;
+
+const P=new Float64Array(NP*3), Q=new Float64Array(NP*3), GA=new Float64Array(NP*3), GS=new Float64Array(NP*3), GW=new Float64Array(NP), ALPHA=new Float64Array(NP);
+const getP=i=>[P[i*3],P[i*3+1],P[i*3+2]];
+
+function makeCluster(ids,beta,alpha){
+  const c0=[0,0,0]; ids.forEach(i=>{c0[0]+=PR[i][0];c0[1]+=PR[i][1];c0[2]+=PR[i][2]}); c0[0]/=ids.length;c0[1]/=ids.length;c0[2]/=ids.length;
+  const q=ids.map(i=>sub(PR[i],c0)); const Aqq=[0,0,0,0,0,0,0,0,0];
+  q.forEach(v=>{for(let c=0;c<3;c++)for(let r=0;r<3;r++)Aqq[c*3+r]+=v[r]*v[c]});
+  ids.forEach(i=>ALPHA[i]=Math.max(ALPHA[i],alpha));
+  return {ids,q,c0,AqqInv:inv3(Aqq),beta,alpha,quat:[0,0,0,1],T:I3(),R:I3(),c:c0.slice(),qc:[0,0,0,1],sx:1,sy:1};
+}
+const clBody=makeCluster([B0,B1,B2,B3,B4,B5,C0,C1,C2,C3,A0,A1,N0,N1,N2],.3,.09);
+const clHead=makeCluster([N0,N1,N2,H0,H1,H2,H3,H4,H5,H6,H7],.2,.1);
+const CLUSTERS=[clBody,clHead];
+
+function resetParticles(drop){
+  for(let i=0;i<NP;i++){const r=PR[i];
+    P[i*3]=r[0];P[i*3+1]=r[1]+drop;P[i*3+2]=r[2];
+    Q[i*3]=P[i*3];Q[i*3+1]=P[i*3+1];Q[i*3+2]=P[i*3+2];
+    GA[i*3]=P[i*3];GA[i*3+1]=P[i*3+1];GA[i*3+2]=P[i*3+2];}
+  CLUSTERS.forEach(c=>{c.quat=[0,0,0,1];c.qc=[0,0,0,1];c.T=I3();c.R=I3();c.c=add(c.c0,[0,drop,0])});
+  EARS.forEach(e=>{e.th=[0,0];e.v=[0,0]});
+}
+
+/* ---------------- ears: two damped pendulums hung from the head ---------------- */
+const EARS=[{side:1,th:[0,0],v:[0,0],tug:null},{side:-1,th:[0,0],v:[0,0],tug:null}];
+const EAR_L=.85, EAR_K=(2*Math.PI*1.9)**2, EAR_C=2*.22*(2*Math.PI*1.9);
+let headPrev=null, headVel=[0,0,0], headAcc=[0,0,0];
+function stepEars(dt){
+  for(const e of EARS){
+    const up=norm([clHead.T[3],clHead.T[4],clHead.T[5]]);
+    // let them hang toward the floor when her head tips (stiff felt, so only partly)
+    let tz=.65*Math.atan2(up[0],up[1]), tx=-.65*Math.atan2(up[2],up[1]);
+    if(e.tug){tz+=e.tug[0];tx+=e.tug[1]}
+    // inertia: the ear lags behind the head
+    const ax=-headAcc[0]/EAR_L, az=headAcc[2]/EAR_L;
+    const tzz=e.th[0], txx=e.th[1];
+    e.v[0]+=(EAR_K*(tz-tzz)-EAR_C*e.v[0]+ax*.9)*dt;
+    e.v[1]+=(EAR_K*(tx-txx)-EAR_C*e.v[1]+az*.9)*dt;
+    e.th[0]+=e.v[0]*dt; e.th[1]+=e.v[1]*dt;
+    // soft limits: outward a little, inward hardly (the body is there)
+    const out=e.th[0]*e.side, outC=clamp(out,-.05,.3);
+    if(out!==outC){e.th[0]=outC*e.side;e.v[0]*=-.2}
+    const fb=clamp(e.th[1],-.22,.22); if(fb!==e.th[1]){e.th[1]=fb;e.v[1]*=-.2}
+  }
+}
+
+/* =================================================================
+   SIMULATION
+   ================================================================= */
+const H=1/240, GRAV=-12;
+let grab=null, rising=false, floaty=false, lastRelease=-10, simTime=0, breath=0;
+let pet=0, squeeze=0, joy=0, leanQ=[0,0,0,1];
+const bounds={x:1.6,zf:1.3,zb:-1.6,y:3.6};
+const home=[0,0];
+const BODYSET=[...new Set([...clBody.ids,...clHead.ids])];
+
+function substep(){
+  const g=floaty?GRAV*.32:GRAV, damp=floaty?.984:.991, maxv=grab?.05:.022;
+  for(let i=0;i<NP;i++){
+    const o=i*3;let vx=(P[o]-Q[o])*damp,vy=(P[o+1]-Q[o+1])*damp,vz=(P[o+2]-Q[o+2])*damp;
+    const sp=Math.hypot(vx,vy,vz);if(sp>maxv){vx*=maxv/sp;vy*=maxv/sp;vz*=maxv/sp}
+    Q[o]=P[o];Q[o+1]=P[o+1];Q[o+2]=P[o+2];
+    P[o]+=vx;P[o+1]+=vy+g*H*H;P[o+2]+=vz;
+  }
+  GS.fill(0);GW.fill(0);
+  const idle=!grab&&(simTime-lastRelease>.6);
+  const sq=squeeze, bsx=1+.006*breath+.07*sq, bsy=1+.012*breath-.12*sq;
+  CLUSTERS.forEach((cl,ci)=>{
+    const ids=cl.ids,n=ids.length;const c=[0,0,0];
+    for(const i of ids){c[0]+=P[i*3];c[1]+=P[i*3+1];c[2]+=P[i*3+2]}c[0]/=n;c[1]/=n;c[2]/=n;
+    const Apq=[0,0,0,0,0,0,0,0,0];
+    for(let k=0;k<n;k++){const i=ids[k],q=cl.q[k],px=P[i*3]-c[0],py=P[i*3+1]-c[1],pz=P[i*3+2]-c[2];
+      for(let col=0;col<3;col++){Apq[col*3]+=px*q[col];Apq[col*3+1]+=py*q[col];Apq[col*3+2]+=pz*q[col]}}
+    cl.quat=extractRotation(Apq,cl.quat);
+    const R=qmat(cl.quat);
+    let A=mm(Apq,cl.AqqInv);const d=det3(A);
+    if(d>1e-4){const k=1/Math.cbrt(d);A=A.map(x=>x*k)}else A=R;
+    let qc=cl.quat;
+    if(ci===0){
+      const up=[R[3],R[4],R[5]],ax=cross(up,[0,1,0]),sn=len(ax),ang=Math.atan2(sn,up[1])*(floaty?.02:idle?.0045:.0006);
+      if(sn>1e-6)qc=qnorm(qmul(qaxis(scl(ax,1/sn),ang),cl.quat));
+    } else qc=qslerp(cl.quat,qmul(leanQ,CLUSTERS[0].qc),.035);
+    cl.qc=qc;
+    const C=mm(qmat(qc),tr3(R));
+    let T=A.map((a,k)=>cl.beta*a+(1-cl.beta)*R[k]); T=mm(C,T);
+    cl.T=T;cl.c=c;cl.R=R;
+    const sx=ci===0?bsx:1+.03*sq, sy=ci===0?bsy:1-.05*sq;
+    cl.sx=sx;cl.sy=sy;
+    for(let k=0;k<n;k++){const i=ids[k],q=cl.q[k];const gg=mv(T,[q[0]*sx,q[1]*sy,q[2]*sx]);
+      GS[i*3]+=gg[0]+c[0];GS[i*3+1]+=gg[1]+c[1];GS[i*3+2]+=gg[2]+c[2];GW[i]+=1}
+  });
+  for(let i=0;i<NP;i++){if(!GW[i])continue;const o=i*3,a=ALPHA[i];
+    const gx=GS[o]/GW[i],gy=GS[o+1]/GW[i],gz=GS[o+2]/GW[i];GA[o]=gx;GA[o+1]=gy;GA[o+2]=gz;
+    P[o]+=(gx-P[o])*a;P[o+1]+=(gy-P[o+1])*a;P[o+2]+=(gz-P[o+2])*a}
+  if(grab&&!grab.holdStill){
+    const t=grab.target;
+    if(grab.ear){
+      // a tug on the ear swings it a little and tilts her head; pull too far and it slips out of your hand
+      const d=sub(t,grab.start),l=len(d);
+      if(l>.45){slip()}
+      else{const e=grab.ear,k=Math.min(1,.2/Math.max(l,1e-6));
+        e.tug=[clamp(d[0]*1.1,-.3,.3),clamp(-d[2]*1.1+d[1]*.4*0,-.2,.2)];
+        const dd=scl(d,Math.min(1,k));for(const i of clHead.ids){const o=i*3;P[o]+=dd[0]*.004;P[o+1]+=dd[1]*.002;P[o+2]+=dd[2]*.004}}
+    } else {
+      for(const gp of grab.parts){const o=gp.i*3,k=.14*gp.w;P[o]+=(t[0]-gp.o[0]-P[o])*k;P[o+1]+=(t[1]-gp.o[1]-P[o+1])*k;P[o+2]+=(t[2]-gp.o[2]-P[o+2])*k}
+      for(const gp of grab.all){const o=gp.i*3,k=.05;P[o]+=(t[0]-gp.o[0]-P[o])*k;P[o+1]+=(t[1]-gp.o[1]-P[o+1])*k;P[o+2]+=(t[2]-gp.o[2]-P[o+2])*k}
+      for(const gp of grab.parts){const o=gp.i*3;if(Math.hypot(P[o]-GA[o],P[o+1]-GA[o+1],P[o+2]-GA[o+2])>.13){slip();break}}
+    }
+  }
+  if(idle){let cx=0,cz=0;for(const i of clBody.ids){cx+=P[i*3];cz+=P[i*3+2]}cx/=clBody.ids.length;cz/=clBody.ids.length;
+    const fx=(home[0]-cx)*.0005,fz=(home[1]-cz)*.0005;for(let i=0;i<NP;i++){P[i*3]+=fx;P[i*3+2]+=fz;Q[i*3]+=fx;Q[i*3+2]+=fz}}
+  if(floaty||(idle&&simTime-lastRelease>1.1)){
+    const R=clBody.R,up=[R[3],R[4],R[5]];
+    if(up[1]<.96)rising=true; else if(up[1]>.995)rising=false;
+    if(rising||floaty){
+      let fx=R[6],fz=R[8];const fl=Math.hypot(fx,fz);if(fl<.2){fx=0;fz=1}else{fx/=fl;fz/=fl}
+      fz+=.08;{const l2=Math.hypot(fx,fz)||1;fx/=l2;fz/=l2}
+      const cy=fz,sy=fx,c=clBody.c,c0=clBody.c0,f=floaty?.01:.006;
+      for(let i=0;i<NP;i++){const r=sub(PR[i],c0),o=i*3;
+        const tx=c[0]+cy*r[0]+sy*r[2],tz=c[2]-sy*r[0]+cy*r[2],ty=c[1]+r[1];
+        P[o]+=(tx-P[o])*f;P[o+1]+=(ty-P[o+1])*f;P[o+2]+=(tz-P[o+2])*f}
+    }
+  }
+  for(let i=0;i<NP;i++){const o=i*3,r=PRAD[i];
+    if(P[o+1]<r){P[o+1]=r;const vy=P[o+1]-Q[o+1];if(vy<0)Q[o+1]=P[o+1]+vy*.2;
+      Q[o]=P[o]-(P[o]-Q[o])*.8;Q[o+2]=P[o+2]-(P[o+2]-Q[o+2])*.8}
+    if(P[o]>bounds.x){P[o]=bounds.x;Q[o]=P[o]+(P[o]-Q[o])*.3}
+    if(P[o]<-bounds.x){P[o]=-bounds.x;Q[o]=P[o]+(P[o]-Q[o])*.3}
+    if(P[o+2]>bounds.zf){P[o+2]=bounds.zf;Q[o+2]=P[o+2]+(P[o+2]-Q[o+2])*.3}
+    if(P[o+2]<bounds.zb){P[o+2]=bounds.zb;Q[o+2]=P[o+2]+(P[o+2]-Q[o+2])*.3}
+    if(P[o+1]>bounds.y){P[o+1]=bounds.y;Q[o+1]=P[o+1]+(P[o+1]-Q[o+1])*.3}
+  }
+  if(floaty&&P[B5*3+1]<=PRAD[B5]+.004){floaty=false;joy=Math.max(joy,.9)}
+  // head motion for the ears
+  const hp=clHead.c;
+  if(headPrev){const v=scl(sub(hp,headPrev),1/H);const a=scl(sub(v,headVel),1/H);
+    headAcc=headAcc.map((x,k)=>x+(clamp(a[k],-60,60)-x)*.15);headVel=v}
+  headPrev=hp.slice();
+  stepEars(H);
+  simTime+=H;
+}
+function slip(){
+  if(grab&&grab.ear)grab.ear.tug=null;
+  grab=null;lastRelease=simTime;floaty=bodyHeight()>.12;joy=Math.max(joy,.5);canvas.style.cursor='grab';
+}
+function bodyHeight(){return P[B5*3+1]-PRAD[B5]}
+function hop(){for(const i of BODYSET)Q[i*3+1]-=.0085;joy=1;EARS.forEach(e=>{e.v[1]+=(Math.random()-.5)*.6;e.v[0]+=e.side*.9})}
+
+/* ---------------- life ---------------- */
+let blink=1, blinkT=1.8, wiggle=0, wiggleT=3.2, twitchT=4.5, petPoint=null, petUntil=-1;
+function life(dt,t){
+  breath=Math.sin(t*1.7);
+  blinkT-=dt; if(blinkT<0){blink=Math.max(0,blink-dt*22); if(blink<=0){blinkT=2.4+Math.random()*3.6}} else blink=Math.min(1,blink+dt*14);
+  wiggleT-=dt; if(wiggleT<0){wiggle=1;wiggleT=4+Math.random()*4} wiggle=Math.max(0,wiggle-dt*1.4);
+  const petting=t<petUntil;
+  pet+=((petting?1:0)-pet)*(1-Math.exp(-dt*(petting?3.5:2.2)));
+  const squeezing=!!(grab&&grab.holdStill);
+  squeeze+=((squeezing?1:0)-squeeze)*(1-Math.exp(-dt*(squeezing?4:7)));
+  joy=Math.max(0,joy-dt*.9);
+  if(petting||joy>.3) wiggle=Math.max(wiggle,.4);
+  if(joy>.5&&Math.random()<dt*2)EARS.forEach(e=>{e.v[0]+=e.side*.35});
+  let lq=[0,0,0,1];
+  if(petPoint&&pet>.01){const local=sub(petPoint,clHead.c),v=[local[0],0,local[2]*.5],l=len(v);
+    if(l>.04){const ax=norm(cross([0,1,0],v));lq=qaxis(ax,.15*pet*Math.min(1,l/.3))}}
+  leanQ=lq;
+  if(!REDUCED&&!grab){twitchT-=dt; if(twitchT<0){twitchT=3.5+Math.random()*5;
+    const e=EARS[Math.random()<.5?0:1]; e.v[Math.random()<.5?0:1]+=(Math.random()<.5?-1:1)*.5}}
+}
+const happy=()=>Math.max(pet,squeeze*.9,joy>.15?Math.min(1,joy*1.4):0);
+
+/* =================================================================
+   MODEL + SKINNING (filled in once the model has loaded)
+   ================================================================= */
+let NV=0,NI=0,REST,RNRM,EARW,HEADW,INDICES,INF,INW,POS,NRM,DYN,NOSEV,NOSEW,EARTIP=[0,0];
+async function loadModel(){
+  const r=await fetch('bunny-model.txt');
+  if(!r.ok)throw new Error('Could not load the bunny model ('+r.status+').');
+  const total=+r.headers.get('content-length')||0;let got=0;const chunks=[];
+  const rd=r.body.getReader();
+  for(;;){const {done,value}=await rd.read();if(done)break;chunks.push(value);got+=value.length;if(total)bar.style.width=Math.round(70*got/total)+'%'}
+  const raw=new Uint8Array(got);let o=0;for(const c of chunks){raw.set(c,o);o+=c.length}
+  const b64=atob(new TextDecoder().decode(raw).trim());const buf=new Uint8Array(b64.length);for(let i=0;i<b64.length;i++)buf[i]=b64.charCodeAt(i);
+  const dv=new DataView(buf.buffer);
+  if(String.fromCharCode(...buf.slice(0,4))!=='BNY1')throw new Error('The bunny model file is damaged.');
+  NV=dv.getUint32(4,true);NI=dv.getUint32(8,true);
+  const lo=[0,1,2].map(k=>dv.getFloat32(12+k*4,true)),hi=[0,1,2].map(k=>dv.getFloat32(24+k*4,true));
+  let off=36;
+  const qpos=new Uint16Array(buf.buffer.slice(off,off+NV*6));off+=NV*6;
+  const qn=new Int8Array(buf.buffer.slice(off,off+NV*4));off+=NV*4;
+  const quv=new Uint16Array(buf.buffer.slice(off,off+NV*4));off+=NV*4;
+  const attr=new Uint8Array(buf.buffer.slice(off,off+NV*4));off+=NV*4;
+  INDICES=new Uint16Array(buf.buffer.slice(off,off+NI*2));
+  REST=new Float32Array(NV*3);RNRM=new Float32Array(NV*3);EARW=new Float32Array(NV);HEADW=new Float32Array(NV);
+  const STATIC=new Float32Array(NV*8); // uv2 rest3 fur ear spare
+  for(let v=0;v<NV;v++){
+    for(let k=0;k<3;k++){REST[v*3+k]=lo[k]+(hi[k]-lo[k])*qpos[v*3+k]/65535;RNRM[v*3+k]=qn[v*4+k]/127}
+    const l=Math.hypot(RNRM[v*3],RNRM[v*3+1],RNRM[v*3+2])||1;RNRM[v*3]/=l;RNRM[v*3+1]/=l;RNRM[v*3+2]/=l;
+    EARW[v]=attr[v*4]/255;HEADW[v]=attr[v*4+1]/255;
+    const s=v*8;STATIC[s]=quv[v*2]/65535;STATIC[s+1]=quv[v*2+1]/65535;STATIC[s+2]=REST[v*3];STATIC[s+3]=REST[v*3+1];STATIC[s+4]=REST[v*3+2];
+    STATIC[s+5]=attr[v*4+2]/255;STATIC[s+6]=attr[v*4+3]/255;
+  }
+  // skin influences: nearest stuffing particles
+  INF=new Int32Array(NV*4);INW=new Float32Array(NV*4);
+  const cand=new Float64Array(NP);
+  for(let v=0;v<NV;v++){
+    const x=REST[v*3],y=REST[v*3+1],z=REST[v*3+2];
+    for(let i=0;i<NP;i++){const dx=x-PR[i][0],dy=y-PR[i][1],dz=z-PR[i][2];cand[i]=Math.exp(-(dx*dx+dy*dy+dz*dz)/(2*.19*.19))}
+    let s=0;for(let k=0;k<4;k++){let bi=0,bw=-1;for(let i=0;i<NP;i++)if(cand[i]>bw){bw=cand[i];bi=i}INF[v*4+k]=bi;INW[v*4+k]=bw;s+=bw;cand[bi]=-2}
+    for(let k=0;k<4;k++)INW[v*4+k]/=(s||1);
+  }
+  // nose vertices for the little wiggle
+  const nl=[],nw=[];
+  for(let v=0;v<NV;v++){const dx=(REST[v*3]-NOSE[0])/.11,dy=(REST[v*3+1]-NOSE[1])/.1;const d=dx*dx+dy*dy;if(d<1&&REST[v*3+2]>.55){nl.push(v);nw.push((1-d)*(1-d))}}
+  NOSEV=Int32Array.from(nl);NOSEW=Float32Array.from(nw);
+  for(const si of [0,1]){let best=-1,bi=0;for(let v=0;v<NV;v++){const sd=si===0?REST[v*3]>0:REST[v*3]<0;if(sd&&EARW[v]>best){best=EARW[v];bi=v}}EARTIP[si]=bi}
+  POS=new Float32Array(NV*3);NRM=new Float32Array(NV*3);DYN=new Float32Array(NV*6);
+  return STATIC;
+}
+
+function skin(t){
+  const Tb=clBody.T,cb=clBody.c,b0=clBody.c0,Th=clHead.T,chh=clHead.c,h0=clHead.c0;
+  const sx=clBody.sx,sy=clBody.sy,hsx=clHead.sx,hsy=clHead.sy;
+  // ear rotations (world), about each pivot after the head transform
+  const ER=EARS.map((e,i)=>{const piv=add(mv(Th,sub(EAR_PIVOT[i],h0)),chh);const Rm=mm(rotZ(e.th[0]),rotX(e.th[1]));return{piv,Rm}});
+  for(let v=0;v<NV;v++){
+    const rx=REST[v*3],ry=REST[v*3+1],rz=REST[v*3+2],wh=HEADW[v];
+    let x=0,y=0,z=0;
+    if(wh<1){const g=mv(Tb,[(rx-b0[0])*sx,(ry-b0[1])*sy,(rz-b0[2])*sx]),w=1-wh;x+=(g[0]+cb[0])*w;y+=(g[1]+cb[1])*w;z+=(g[2]+cb[2])*w}
+    if(wh>0){const g=mv(Th,[(rx-h0[0])*hsx,(ry-h0[1])*hsy,(rz-h0[2])*hsx]);x+=(g[0]+chh[0])*wh;y+=(g[1]+chh[1])*wh;z+=(g[2]+chh[2])*wh}
+    for(let k=0;k<4;k++){const i=INF[v*4+k],w=INW[v*4+k],o=i*3;x+=(P[o]-GA[o])*w;y+=(P[o+1]-GA[o+1])*w;z+=(P[o+2]-GA[o+2])*w}
+    // normal: blend of the two frames
+    const n=[RNRM[v*3],RNRM[v*3+1],RNRM[v*3+2]];
+    const nb=mv(Tb,n),nh=mv(Th,n);let nx=nb[0]+(nh[0]-nb[0])*wh,ny=nb[1]+(nh[1]-nb[1])*wh,nz=nb[2]+(nh[2]-nb[2])*wh;
+    const ew=EARW[v];
+    if(ew>0.002){const er=ER[rx>0?0:1],r=[x-er.piv[0],y-er.piv[1],z-er.piv[2]],rr=mv(er.Rm,r);
+      x+=(rr[0]-r[0])*ew;y+=(rr[1]-r[1])*ew;z+=(rr[2]-r[2])*ew;
+      const rn=mv(er.Rm,[nx,ny,nz]);nx+=(rn[0]-nx)*ew;ny+=(rn[1]-ny)*ew;nz+=(rn[2]-nz)*ew}
+    const nl=Math.hypot(nx,ny,nz)||1;
+    POS[v*3]=x;POS[v*3+1]=y;POS[v*3+2]=z;
+    const d=v*6;DYN[d]=x;DYN[d+1]=y;DYN[d+2]=z;DYN[d+3]=nx/nl;DYN[d+4]=ny/nl;DYN[d+5]=nz/nl;
+  }
+  // nose wiggle, in the head's frame
+  const wig=wiggle*Math.sin(t*34)*.0035;
+  if(wig){const up=norm([Th[3],Th[4],Th[5]]);for(let k=0;k<NOSEV.length;k++){const v=NOSEV[k],w=NOSEW[k]*wig,d=v*6;
+    DYN[d]+=up[0]*w;DYN[d+1]+=up[1]*w;DYN[d+2]+=up[2]*w;POS[v*3]=DYN[d];POS[v*3+1]=DYN[d+1];POS[v*3+2]=DYN[d+2]}}
+}
+
+/* =================================================================
+   CAMERA
+   ================================================================= */
+const cam={yaw:0,pitch:.13,zoom:1,yawT:0,pitchT:.13,zoomT:1,fov:30*Math.PI/180,target:[0,.88,0],pos:[0,0,5],dist:5,aspect:1};
+let lastInteract=-10;
+function updateCamera(dt,t){
+  const k=1-Math.exp(-dt*8);
+  let yawT=cam.yawT;
+  if(!REDUCED&&t-lastInteract>5)yawT+=Math.sin(t*.23)*.07;
+  cam.yaw+=(yawT-cam.yaw)*k;cam.pitch+=(cam.pitchT-cam.pitch)*k;cam.zoom+=(cam.zoomT-cam.zoom)*k;
+  const th=Math.tan(cam.fov/2);
+  const fit=Math.max(1.1/th,1.02/(th*cam.aspect))+.5;
+  cam.dist=fit*cam.zoom;
+  const cp=Math.cos(cam.pitch);
+  cam.pos=add(cam.target,scl([Math.sin(cam.yaw)*cp,Math.sin(cam.pitch),Math.cos(cam.yaw)*cp],cam.dist));
+  const halfW=th*cam.aspect*cam.dist;
+  bounds.x=Math.max(.75,halfW-.9);
+}
+function camBasis(){const f=norm(sub(cam.target,cam.pos)),r=norm(cross(f,[0,1,0])),u=cross(r,f);return{f,r,u}}
+function viewProj(){
+  const {f,r,u}=camBasis(),e=cam.pos;
+  const view=[r[0],u[0],-f[0],0,r[1],u[1],-f[1],0,r[2],u[2],-f[2],0,-dot(r,e),-dot(u,e),dot(f,e),1];
+  const n=.1,fa=40,ff=1/Math.tan(cam.fov/2);
+  const proj=[ff/cam.aspect,0,0,0,0,ff,0,0,0,0,fa/(n-fa),-1,0,0,n*fa/(n-fa),0];
+  const out=new Float32Array(16);
+  for(let c=0;c<4;c++)for(let i=0;i<4;i++){let s=0;for(let k=0;k<4;k++)s+=proj[k*4+i]*view[c*4+k];out[c*4+i]=s}
+  return out;
+}
+function rayAt(clientX,clientY){
+  const rc=canvas.getBoundingClientRect();
+  const nx=((clientX-rc.left)/rc.width)*2-1,ny=1-((clientY-rc.top)/rc.height)*2;
+  const {f,r,u}=camBasis(),th=Math.tan(cam.fov/2);
+  return{o:cam.pos.slice(),d:norm(add(f,add(scl(r,nx*th*cam.aspect),scl(u,ny*th))))};
+}
+
+/* =================================================================
+   PICKING + INTERACTION
+   ================================================================= */
+function pick(cx,cy){
+  if(!NV)return null;
+  const {o,d}=rayAt(cx,cy);let best=1e9,hit=null;
+  for(let i=0;i<NI;i+=3){
+    const a=INDICES[i]*3,b=INDICES[i+1]*3,c=INDICES[i+2]*3;
+    const e1x=POS[b]-POS[a],e1y=POS[b+1]-POS[a+1],e1z=POS[b+2]-POS[a+2],e2x=POS[c]-POS[a],e2y=POS[c+1]-POS[a+1],e2z=POS[c+2]-POS[a+2];
+    const px=d[1]*e2z-d[2]*e2y,py=d[2]*e2x-d[0]*e2z,pz=d[0]*e2y-d[1]*e2x,det=e1x*px+e1y*py+e1z*pz;
+    if(Math.abs(det)<1e-12)continue;const id=1/det;
+    const tx=o[0]-POS[a],ty=o[1]-POS[a+1],tz=o[2]-POS[a+2],uu=(tx*px+ty*py+tz*pz)*id;if(uu<0||uu>1)continue;
+    const qx=ty*e1z-tz*e1y,qy=tz*e1x-tx*e1z,qz=tx*e1y-ty*e1x,vv=(d[0]*qx+d[1]*qy+d[2]*qz)*id;if(vv<0||uu+vv>1)continue;
+    const t=(e2x*qx+e2y*qy+e2z*qz)*id;if(t>.01&&t<best){best=t;hit={t,tri:i,u:uu,v:vv}}
+  }
+  if(!hit)return null;
+  const ws=[1-hit.u-hit.v,hit.u,hit.v],vs=[INDICES[hit.tri],INDICES[hit.tri+1],INDICES[hit.tri+2]];
+  const v=vs[ws.indexOf(Math.max(...ws))];
+  return{point:add(o,scl(d,hit.t)),vert:v};
+}
+const isEarVert=v=>EARW[v]>.18;
+function startGrab(hit){
+  const v=hit.vert,parts=[];let ear=null;
+  if(isEarVert(v)){ear=EARS[REST[v*3]>0?0:1];ear.tug=[0,0]}
+  else{let mx=0;for(let k=0;k<4;k++)mx=Math.max(mx,INW[v*4+k]);for(let k=0;k<4;k++){const w=INW[v*4+k]/mx;if(w>.15)parts.push({i:INF[v*4+k],w})}}
+  parts.forEach(g=>{g.o=sub(hit.point,getP(g.i));g.w=Math.max(g.w,.2)});
+  const all=ear?[]:BODYSET.map(i=>({i,o:sub(hit.point,getP(i))}));
+  const {f}=camBasis();
+  grab={parts,all,ear,start:hit.point.slice(),target:hit.point.slice(),plane:{p:hit.point.slice(),n:f},t0:performance.now(),x0:0,y0:0,moved:0,holdStill:false};
+  floaty=false;rising=false;
+}
+function moveGrab(cx,cy){
+  const {o,d}=rayAt(cx,cy),pl=grab.plane,den=dot(d,pl.n);if(Math.abs(den)<1e-5)return;
+  const t=dot(sub(pl.p,o),pl.n)/den;if(t<=0)return;
+  const p=add(o,scl(d,t));
+  if(!grab.ear)p[1]=clamp(p[1],grab.start[1]-.05,grab.start[1]+.42);
+  grab.target=p;
+}
+
+const pointers=new Map();let drag=null,lastDownHit=false,hoverXY=null,pinch=null,holdTimer=0;
+canvas.addEventListener('pointerdown',e=>{
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});lastInteract=simTime;
+  if(pointers.size===2&&!EMBED&&(!drag||drag.type==='orbit')){
+    const [a,b]=[...pointers.values()];pinch={d:Math.hypot(a.x-b.x,a.y-b.y),z:cam.zoomT};drag=null;return}
+  if(drag||grab)return;
+  const hit=pick(e.clientX,e.clientY);lastDownHit=!!hit;
+  if(hit){startGrab(hit);grab.id=e.pointerId;grab.x0=e.clientX;grab.y0=e.clientY;grab.point=hit.point;canvas.setPointerCapture(e.pointerId);canvas.style.cursor='grabbing';
+    clearTimeout(holdTimer);holdTimer=setTimeout(()=>{if(grab&&grab.id===e.pointerId&&grab.moved<8&&!grab.ear){grab.holdStill=true}},190)}
+  else if(!(EMBED&&e.pointerType==='touch')){drag={type:'orbit',id:e.pointerId,x:e.clientX,y:e.clientY};canvas.setPointerCapture(e.pointerId)}
+});
+canvas.addEventListener('touchstart',e=>{if(lastDownHit||!EMBED)e.preventDefault()},{passive:false});
+canvas.addEventListener('pointermove',e=>{
+  if(pointers.has(e.pointerId))pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pinch&&pointers.size===2){const [a,b]=[...pointers.values()];cam.zoomT=clamp(pinch.z*pinch.d/Math.max(20,Math.hypot(a.x-b.x,a.y-b.y)),.72,1.4);return}
+  if(grab&&grab.id===e.pointerId){
+    grab.moved=Math.max(grab.moved,Math.hypot(e.clientX-grab.x0,e.clientY-grab.y0));
+    if(grab.holdStill&&grab.moved>14)grab.holdStill=false;
+    if(!grab.holdStill)moveGrab(e.clientX,e.clientY);
+    lastInteract=simTime;return}
+  if(drag&&drag.id===e.pointerId){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+    cam.yawT=clamp(cam.yawT-dx*.006,-.7,.7);cam.pitchT=clamp(cam.pitchT+dy*.004,.02,.55);lastInteract=simTime;return}
+  if(e.pointerType==='mouse')hoverXY=[e.clientX,e.clientY];
+});
+canvas.addEventListener('pointerleave',()=>{hoverXY=null;petUntil=-1});
+function endPointer(e){
+  pointers.delete(e.pointerId);if(pointers.size<2)pinch=null;
+  if(grab&&grab.id===e.pointerId){
+    clearTimeout(holdTimer);
+    const quick=grab.moved<6&&performance.now()-grab.t0<260, wasHold=grab.holdStill;
+    if(grab.ear)grab.ear.tug=null;
+    grab=null;lastRelease=simTime;canvas.style.cursor='grab';
+    if(quick)hop();
+    else if(wasHold)joy=Math.max(joy,.7);
+    else floaty=bodyHeight()>.1;
+  }
+  if(drag&&drag.id===e.pointerId)drag=null;
+  lastDownHit=false;
+}
+canvas.addEventListener('pointerup',endPointer);canvas.addEventListener('pointercancel',endPointer);
+canvas.addEventListener('wheel',e=>{if(EMBED)return;e.preventDefault();cam.zoomT=clamp(cam.zoomT*Math.exp(e.deltaY*.0012),.72,1.4);lastInteract=simTime},{passive:false});
+function resetBunny(){if(grab&&grab.ear)grab.ear.tug=null;grab=null;resetParticles(REDUCED?0:.45);floaty=!REDUCED;rising=false;cam.yawT=0;cam.pitchT=.13;cam.zoomT=1;lastRelease=simTime;headPrev=null}
+document.getElementById('reset').addEventListener('click',resetBunny);
+canvas.addEventListener('keydown',e=>{if(e.key==='r'||e.key==='R')resetBunny()});
+
+/* =================================================================
+   WEBGPU
+   ================================================================= */
+const WGSL=/* wgsl */`
+struct U {
+  viewProj: mat4x4f,
+  cam: vec4f,     // xyz eye, w time
+  misc: vec4f,    // x shadow strength, y fur length, z fur layers
+  shade: vec4f,   // rgb shadow tint
+  eye0: vec4f,    // rest xyz, openness
+  eye1: vec4f,
+  lid0: vec4f,    // lid fur colour (linear), happy amount
+  lid1: vec4f,
+  casters: array<vec4f, 16>,
+};
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var furTex: texture_2d<f32>;
+@group(0) @binding(2) var furSmp: sampler;
+
+const Lk = vec3f(-0.4468, 0.6906, 0.5687); const Ck = vec3f(1.0, 0.96, 0.9) * 1.12;
+const Lf = vec3f(0.8437, 0.2978, 0.4467);  const Cf = vec3f(0.82, 0.88, 1.0) * 0.42;
+const Lr = vec3f(0.2397, 0.5274, -0.8151); const Cr = vec3f(1.0, 0.93, 0.86) * 0.9;
+const hemiSky = vec3f(0.92, 0.93, 0.96);
+const hemiGround = vec3f(0.62, 0.52, 0.45);
+
+struct VIn {
+  @location(0) pos: vec3f, @location(1) nrm: vec3f,
+  @location(2) uv: vec2f, @location(3) rest: vec3f, @location(4) fur: f32, @location(5) ear: f32,
+};
+struct VOut {
+  @builtin(position) clip: vec4f,
+  @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
+  @location(3) rest: vec3f, @location(4) fur: f32, @location(5) h: f32,
+};
+
+fn hash(p: vec3f) -> f32 {
+  var q = fract(p * 0.3183099 + vec3f(0.11, 0.17, 0.13));
+  q *= 17.0;
+  return fract(q.x * q.y * q.z * (q.x + q.y + q.z));
+}
+fn vnoise(p: vec3f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  let a = mix(mix(hash(i), hash(i + vec3f(1.0, 0.0, 0.0)), w.x), mix(hash(i + vec3f(0.0, 1.0, 0.0)), hash(i + vec3f(1.0, 1.0, 0.0)), w.x), w.y);
+  let b = mix(mix(hash(i + vec3f(0.0, 0.0, 1.0)), hash(i + vec3f(1.0, 0.0, 1.0)), w.x), mix(hash(i + vec3f(0.0, 1.0, 1.0)), hash(i + vec3f(1.0, 1.0, 1.0)), w.x), w.y);
+  return mix(a, b, w.z);
+}
+fn wrapL(nl: f32, w: f32) -> f32 { return max((nl + w) / (1.0 + w), 0.0) / (1.0 + w); }
+fn aces(x: vec3f) -> vec3f {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
+}
+fn finish(c: vec3f) -> vec3f { return pow(aces(c * 1.04), vec3f(1.0 / 2.2)); }
+fn floorAO(wp: vec3f, N: vec3f) -> f32 {
+  let fy = clamp(wp.y / 0.3, 0.0, 1.0);
+  let occ = (1.0 - fy * fy * (3.0 - 2.0 * fy)) * clamp(0.6 - 0.5 * N.y, 0.0, 1.0);
+  return 1.0 - 0.5 * occ;
+}
+fn fabric(N: vec3f, V: vec3f, alb: vec3f, ao: f32) -> vec3f {
+  let NdV = clamp(dot(N, V), 0.0, 1.0);
+  let dif = Ck * wrapL(dot(N, Lk), 0.6) + Cf * wrapL(dot(N, Lf), 0.6);
+  let hemi = mix(hemiGround, hemiSky, N.y * 0.5 + 0.5) * 0.62;
+  var col = alb * (dif * mix(0.7, 1.0, ao) + hemi * ao);
+  col += Cr * alb * pow(1.0 - NdV, 2.4) * wrapL(dot(N, Lr), 0.7) * 0.9;
+  col += mix(alb, vec3f(1.0), 0.35) * pow(1.0 - NdV, 3.5) * 0.32 * ao;
+  return col;
+}
+// glossy black bead eyes, drawn over the model's painted ones
+fn beads(rest: vec3f, base: vec3f, V: vec3f) -> vec3f {
+  var c = base;
+  for (var k = 0; k < 2; k++) {
+    let e = select(u.eye0, u.eye1, k == 1);
+    if (rest.z < e.z - 0.06) { continue; }
+    let d = (rest.xy - e.xy) / vec2f(0.031, 0.035);
+    let rr = dot(d, d);
+    if (rr > 1.3) { continue; }
+    let nb = normalize(vec3f(d.x * 0.85, d.y * 0.85, sqrt(max(0.0, 1.0 - min(rr, 1.0)))));
+    let F = 0.04 + 0.96 * pow(1.0 - max(dot(nb, V), 0.0), 5.0);
+    let R = reflect(-V, nb);
+    let env = mix(vec3f(0.02), vec3f(0.6, 0.6, 0.62), smoothstep(-0.1, 0.8, R.y));
+    let spec = pow(max(dot(nb, normalize(Lk + V)), 0.0), 260.0) * 3.0;
+    let bead = vec3f(0.012, 0.009, 0.008) + env * F * 0.35 + vec3f(spec);
+    let m = 1.0 - smoothstep(0.82, 1.0, sqrt(rr));
+    // a soft dark seam where the bead sits in the fur
+    let seam = (1.0 - smoothstep(1.0, 1.14, sqrt(rr))) * (1.0 - m);
+    c = mix(c, c * 0.55, seam);
+    c = mix(c, bead, m);
+  }
+  return c;
+}
+// sleepy / happy eyelids painted over the bead eyes
+fn lids(rest: vec3f, base: vec3f, N: vec3f, V: vec3f, ao: f32) -> vec3f {
+  var c = base;
+  for (var k = 0; k < 2; k++) {
+    let e = select(u.eye0, u.eye1, k == 1);
+    let lid = select(u.lid0, u.lid1, k == 1);
+    let d = (rest.xy - e.xy) / vec2f(0.034, 0.038);
+    if (rest.z < e.z - 0.06 || dot(d, d) > 1.6) { continue; }
+    let open = e.w;
+    let happy = lid.w;
+    // the lid edge comes down from the top; when happy it curves into a smiling arc
+    let edge = mix(1.25, -0.25, 1.0 - open) + happy * 0.45 * (d.x * d.x);
+    let inside = 1.0 - smoothstep(0.92, 1.12, length(d));
+    let covered = smoothstep(edge - 0.08, edge + 0.08, d.y) * inside;
+    c = mix(c, fabric(N, V, lid.rgb, ao), covered);
+    let lash = (1.0 - smoothstep(0.0, 0.09, abs(d.y - edge))) * inside * step(open, 0.97);
+    c = mix(c, vec3f(0.08, 0.05, 0.04), lash * 0.8);
+  }
+  return c;
+}
+
+@vertex fn vsBunny(i: VIn) -> VOut {
+  var o: VOut;
+  o.clip = u.viewProj * vec4f(i.pos, 1.0);
+  o.wp = i.pos; o.n = i.nrm; o.uv = i.uv; o.rest = i.rest; o.fur = i.fur; o.h = 0.0;
+  return o;
+}
+@fragment fn fsBunny(i: VOut, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
+  var N = normalize(i.n);
+  if (!ff) { N = -N; }
+  let V = normalize(u.cam.xyz - i.wp);
+  var alb = textureSample(furTex, furSmp, i.uv).rgb;
+  let bare = 1.0 - smoothstep(0.0, 0.35, i.fur);
+  // hide the model's own painted eye wherever it peeks out around the bead
+  for (var k = 0; k < 2; k++) {
+    let e = select(u.eye0, u.eye1, k == 1);
+    let d = (i.rest.xy - e.xy) / vec2f(0.031, 0.035);
+    let rr = dot(d, d);
+    if (i.rest.z > e.z - 0.08 && rr < 4.0 && rr > 0.7) {
+      let lum = dot(alb, vec3f(0.3, 0.59, 0.11));
+      let fur = select(u.lid0.rgb, u.lid1.rgb, k == 1);
+      alb = mix(alb, fur, (1.0 - smoothstep(0.03, 0.14, lum)) * (1.0 - smoothstep(2.6, 4.0, rr)));
+    }
+  }
+  let fp = i.rest * 140.0;
+  let n0 = vnoise(fp);
+  let e = 0.5;
+  let g = vec3f(vnoise(fp + vec3f(e, 0.0, 0.0)) - n0, vnoise(fp + vec3f(0.0, e, 0.0)) - n0, vnoise(fp + vec3f(0.0, 0.0, e)) - n0) / e;
+  N = normalize(N - 0.12 * i.fur * (g - N * dot(g, N)));
+  alb *= mix(1.0, 0.9, clamp(u.misc.z / 4.0, 0.0, 1.0) * i.fur);
+  var col = fabric(N, V, alb, floorAO(i.wp, N));
+  // eyes are lit separately so they stay glossy black
+  if (bare > 0.0) {
+    col = beads(i.rest, col, V);
+  }
+  return vec4f(finish(col), 1.0);
+}
+
+// ---- fur: a few offset layers whose coverage thins out toward the tips
+@vertex fn vsShell(i: VIn, @builtin(instance_index) inst: u32) -> VOut {
+  var o: VOut;
+  let h = (f32(inst) + 1.0) / max(u.misc.z, 1.0);
+  let L = u.misc.y * i.fur;
+  let p = i.pos + i.nrm * (L * h) + vec3f(0.0, -1.0, 0.0) * (L * 0.3 * h * h);
+  o.clip = u.viewProj * vec4f(p, 1.0);
+  o.wp = p; o.n = i.nrm; o.uv = i.uv; o.rest = i.rest; o.fur = i.fur; o.h = h;
+  return o;
+}
+struct ShellOut { @location(0) c: vec4f, @builtin(sample_mask) mask: u32 };
+@fragment fn fsShell(i: VOut, @builtin(front_facing) ff: bool) -> ShellOut {
+  let fc = i.clip;
+  if (i.fur < 0.12) { discard; }
+  for (var k = 0; k < 2; k++) {
+    let e = select(u.eye0, u.eye1, k == 1);
+    let d = (i.rest.xy - e.xy) / vec2f(0.031, 0.035);
+    if (i.rest.z > e.z - 0.08 && dot(d, d) < 4.5) { discard; }
+  }
+  let n = vnoise(i.rest * 170.0) * 0.6 + vnoise(i.rest * 410.0 + vec3f(3.1, 7.7, 1.3)) * 0.4;
+  let t = 0.22 + 0.66 * i.h;
+  let a = smoothstep(t - 0.08, t + 0.08, n);
+  if (a < 0.03) { discard; }
+  let dither = fract(dot(floor(fc.xy), vec2f(0.375, 0.6875)));
+  var m = 0u;
+  for (var k = 0u; k < 4u; k++) {
+    if (a > fract((f32(k) + 0.5) / 4.0 + dither)) { m |= (1u << k); }
+  }
+  if (m == 0u) { discard; }
+  var N = normalize(i.n);
+  if (!ff) { N = -N; }
+  let V = normalize(u.cam.xyz - i.wp);
+  var alb = textureSampleLevel(furTex, furSmp, i.uv, 1.0).rgb;
+  alb = alb * mix(0.86, 1.04, i.h) * (0.95 + 0.1 * n);
+  let rimSoft = mix(1.0, 0.85, pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0));
+  var o: ShellOut;
+  o.c = vec4f(finish(fabric(N, V, alb, floorAO(i.wp, N)) * rimSoft), 1.0);
+  o.mask = m;
+  return o;
+}
+
+struct GOut { @builtin(position) clip: vec4f, @location(0) wp: vec3f };
+@vertex fn vsGround(@builtin(vertex_index) vi: u32) -> GOut {
+  var c = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let p = vec3f(c[vi].x * 7.0, 0.0, c[vi].y * 7.0);
+  var o: GOut;
+  o.clip = u.viewProj * vec4f(p, 1.0);
+  o.wp = p;
+  return o;
+}
+@fragment fn fsGround(i: GOut) -> @location(0) vec4f {
+  var occ = 0.0;
+  var core = 0.0;
+  for (var k = 0u; k < 16u; k++) {
+    let s = u.casters[k];
+    if (s.w <= 0.0) { continue; }
+    let d = s.xyz - i.wp;
+    let l = max(length(d), 1e-3);
+    occ += clamp(s.w * s.w * (d.y / l) / (l * l), 0.0, 1.0);
+    let h = max(s.xyz.y - s.w, 0.0);
+    let rr = length(d.xz) / (s.w * 0.95 + h * 0.6);
+    core += (1.0 - smoothstep(0.0, 1.0, rr)) * exp(-h * 9.0);
+  }
+  let a = clamp(occ * u.misc.x * 0.5 + core * 0.2, 0.0, 0.7);
+  return vec4f(u.shade.rgb * a, a);
+}
+`;
+
+const fb=document.getElementById('fallback'), loadingEl=document.getElementById('loading');
+function showFallback(msg){if(msg)document.getElementById('fallbackMsg').textContent=msg;fb.hidden=false;loadingEl.hidden=true;canvas.style.display='none';document.getElementById('hint').hidden=true;document.getElementById('reset').hidden=true}
+
+const MOBILE=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)||COARSE;
+const forcedFur=params.has('fur')?clamp(parseInt(params.get('fur'),10)||0,0,8):null;
+const quality={shells:forcedFur??(MOBILE||(navigator.hardwareConcurrency||8)<=4?3:5),dprCap:MOBILE?1.75:2,furLen:.016};
+
+async function loadTexture(device){
+  const r=await fetch('bunny-fur.jpg');
+  if(!r.ok)throw new Error('Could not load the fur texture ('+r.status+').');
+  const blob=await r.blob();
+  const base=await createImageBitmap(blob,{colorSpaceConversion:'none'});
+  const size=base.width,levels=Math.floor(Math.log2(size))+1;
+  const tex=device.createTexture({size:[size,size],format:'rgba8unorm-srgb',mipLevelCount:levels,
+    usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT});
+  device.queue.copyExternalImageToTexture({source:base},{texture:tex,mipLevel:0},[size,size]);
+  for(let l=1;l<levels;l++){const s=Math.max(1,size>>l);
+    const bm=await createImageBitmap(blob,{resizeWidth:s,resizeHeight:s,resizeQuality:'high',colorSpaceConversion:'none'});
+    device.queue.copyExternalImageToTexture({source:bm},{texture:tex,mipLevel:l},[s,s]);bm.close?.()}
+  base.close?.();
+  return tex;
+}
+
+async function init(){
+  if(!('gpu' in navigator)){showFallback();return}
+  let adapter;try{adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'})}catch(e){}
+  if(!adapter){showFallback('WebGPU is switched off or unavailable on this device. Try a recent Chrome, Edge or Safari with hardware acceleration on.');return}
+  const device=await adapter.requestDevice();
+  device.lost.then(info=>{if(info.reason!=='destroyed')showFallback('The graphics device was reset. Reload the page to bring her back.')});
+  const ctx=canvas.getContext('webgpu');const format=navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({device,format,alphaMode:'premultiplied'});
+
+  const module=device.createShaderModule({code:WGSL});
+  const [STATIC,tex,info]=await Promise.all([loadModel(),loadTexture(device),module.getCompilationInfo?.()]);
+  bar.style.width='90%';
+  if(info&&info.messages.some(m=>m.type==='error')){console.error(info.messages.map(m=>m.lineNum+': '+m.message).join('\n'));showFallback('The shader failed to compile on this device.');return}
+
+  const dbuf=device.createBuffer({size:DYN.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+  const sbuf=device.createBuffer({size:STATIC.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+  device.queue.writeBuffer(sbuf,0,STATIC);
+  const ibytes=INDICES.byteLength+(INDICES.byteLength%4);
+  const ibuf=device.createBuffer({size:ibytes,usage:GPUBufferUsage.INDEX|GPUBufferUsage.COPY_DST});
+  {const pad=new Uint16Array(ibytes/2);pad.set(INDICES);device.queue.writeBuffer(ibuf,0,pad)}
+  const UF=new Float32Array(108);
+  const ubuf=device.createBuffer({size:UF.byteLength,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+  const smp=device.createSampler({magFilter:'linear',minFilter:'linear',mipmapFilter:'linear',maxAnisotropy:4,addressModeU:'repeat',addressModeV:'repeat'});
+  const bgl=device.createBindGroupLayout({entries:[
+    {binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}},
+    {binding:1,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:'float'}},
+    {binding:2,visibility:GPUShaderStage.FRAGMENT,sampler:{type:'filtering'}}]});
+  const bind=device.createBindGroup({layout:bgl,entries:[{binding:0,resource:{buffer:ubuf}},{binding:1,resource:tex.createView()},{binding:2,resource:smp}]});
+  const layout=device.createPipelineLayout({bindGroupLayouts:[bgl]});
+  const SAMPLES=4;
+  const vlayout=[
+    {arrayStride:24,attributes:[{shaderLocation:0,offset:0,format:'float32x3'},{shaderLocation:1,offset:12,format:'float32x3'}]},
+    {arrayStride:32,attributes:[{shaderLocation:2,offset:0,format:'float32x2'},{shaderLocation:3,offset:8,format:'float32x3'},{shaderLocation:4,offset:20,format:'float32'},{shaderLocation:5,offset:24,format:'float32'}]}];
+  const depthOn={format:'depth24plus',depthWriteEnabled:true,depthCompare:'less'};
+  const [bunnyPipe,shellPipe,groundPipe]=await Promise.all([
+    device.createRenderPipelineAsync({layout,vertex:{module,entryPoint:'vsBunny',buffers:vlayout},fragment:{module,entryPoint:'fsBunny',targets:[{format}]},
+      primitive:{topology:'triangle-list',cullMode:'none'},depthStencil:depthOn,multisample:{count:SAMPLES}}),
+    device.createRenderPipelineAsync({layout,vertex:{module,entryPoint:'vsShell',buffers:vlayout},fragment:{module,entryPoint:'fsShell',targets:[{format}]},
+      primitive:{topology:'triangle-list',cullMode:'none'},depthStencil:depthOn,multisample:{count:SAMPLES}}),
+    device.createRenderPipelineAsync({layout,vertex:{module,entryPoint:'vsGround'},
+      fragment:{module,entryPoint:'fsGround',targets:[{format,blend:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}}}]},
+      primitive:{topology:'triangle-list',cullMode:'none'},depthStencil:{format:'depth24plus',depthWriteEnabled:false,depthCompare:'less'},multisample:{count:SAMPLES}})
+  ]);
+
+  let msaa=null,depth=null,W=0,Hh=0;
+  function resize(){
+    const dpr=Math.min(window.devicePixelRatio||1,quality.dprCap);
+    const w=Math.max(1,Math.round(canvas.clientWidth*dpr)),h=Math.max(1,Math.round(canvas.clientHeight*dpr));
+    if(w===W&&h===Hh)return;W=w;Hh=h;canvas.width=w;canvas.height=h;cam.aspect=w/h;
+    msaa?.destroy();depth?.destroy();
+    msaa=device.createTexture({size:[w,h],format,sampleCount:SAMPLES,usage:GPUTextureUsage.RENDER_ATTACHMENT});
+    depth=device.createTexture({size:[w,h],format:'depth24plus',sampleCount:SAMPLES,usage:GPUTextureUsage.RENDER_ATTACHMENT});
+  }
+  new ResizeObserver(resize).observe(canvas);resize();
+
+  const dark=matchMedia('(prefers-color-scheme: dark)');
+  const isDark=()=>{const t=document.documentElement.dataset.theme;return t?t==='dark':dark.matches};
+  const restC=[[.38,.15,.55,.16],[-.38,.15,.55,.16],[.3,.12,-.2,.14],[-.3,.12,-.2,.14],[.3,.5,.45,.08],[-.3,.5,.45,.08]];
+  function writeUniforms(t){
+    UF.set(viewProj(),0);UF.set([...cam.pos,t],16);UF.set([isDark()?1.25:1.0,quality.furLen,quality.shells,0],20);
+    UF.set(isDark()?[0,0,0,1]:[.2,.14,.1,1],24);
+    const open=Math.min(blink,1-.92*happy()), hp=happy();
+    UF.set([...EYE[0].c,open],28);UF.set([...EYE[1].c,open],32);
+    UF.set([...LID[0],hp],36);UF.set([...LID[1],hp],40);
+    let k=44;const put=(p,r)=>{if(k>=108)return;UF[k]=p[0];UF[k+1]=p[1];UF[k+2]=p[2];UF[k+3]=r;k+=4};
+    put(getP(B0),.5);put(getP(H0),.44);
+    for(const c of restC)put(add(mv(clBody.T,sub(c,clBody.c0)),clBody.c),c[3]);
+    for(const v of EARTIP)put([POS[v*3],POS[v*3+1]+.05,POS[v*3+2]],.12);
+    while(k<108){UF[k+3]=0;k+=4}
+    device.queue.writeBuffer(ubuf,0,UF);
+  }
+
+  let running=true,visible=true,last=performance.now(),acc=0,clock=0,frameNo=0;
+  const perf={frames:0,sum:0,stage:0};
+  function adapt(dt){
+    if(forcedFur!==null||perf.stage>=2)return;
+    perf.frames++;if(perf.frames<40)return;perf.sum+=dt;
+    if(perf.frames<130)return;
+    const avg=perf.sum/(perf.frames-40);perf.frames=0;perf.sum=0;
+    if(avg>.024){perf.stage++;
+      if(perf.stage===1){quality.shells=Math.max(2,quality.shells-2);quality.dprCap=Math.min(quality.dprCap,1.5)}
+      else{quality.shells=0;quality.dprCap=1}
+      W=0;resize();
+    } else perf.stage=2;
+  }
+  new IntersectionObserver(es=>{visible=es[0].isIntersecting;kick()}).observe(canvas);
+  document.addEventListener('visibilitychange',kick);
+  function kick(){const want=visible&&!document.hidden;if(want&&!running){running=true;last=performance.now();requestAnimationFrame(frame)}else if(!want)running=false}
+
+  function frame(now){
+    if(!running)return;
+    const dt=Math.min(.05,(now-last)/1000);last=now;clock+=dt;frameNo++;
+    adapt(dt);
+    resize();
+    updateCamera(dt,clock);
+    life(dt,clock);
+    if(hoverXY&&!grab&&!drag&&frameNo%2===0){const h=pick(hoverXY[0],hoverXY[1]);canvas.style.cursor=h?'grab':'default';
+      if(h&&!isEarVert(h.vert)){petPoint=h.point;petUntil=clock+.45}hoverXY=null}
+    if(grab&&grab.holdStill&&grab.point){petPoint=grab.point;petUntil=clock+.2}
+    acc+=dt;let n=0;while(acc>=H&&n<12){substep();acc-=H;n++}if(n>=12)acc=0;
+    skin(clock);
+    device.queue.writeBuffer(dbuf,0,DYN);
+    writeUniforms(clock);
+    const enc=device.createCommandEncoder();
+    const pass=enc.beginRenderPass({colorAttachments:[{view:msaa.createView(),resolveTarget:ctx.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'discard'}],
+      depthStencilAttachment:{view:depth.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard'}});
+    pass.setBindGroup(0,bind);
+    if(SHADOW){pass.setPipeline(groundPipe);pass.draw(6)}
+    pass.setVertexBuffer(0,dbuf);pass.setVertexBuffer(1,sbuf);pass.setIndexBuffer(ibuf,'uint16');
+    pass.setPipeline(bunnyPipe);pass.drawIndexed(NI);
+    if(quality.shells>0){pass.setPipeline(shellPipe);pass.drawIndexed(NI,quality.shells)}
+    pass.end();device.queue.submit([enc.finish()]);
+    if(frameNo===2){canvas.classList.add('ready');loadingEl.hidden=true}
+    requestAnimationFrame(frame);
+  }
+  resetBunny();
+  if(params.has('debug'))window.__bunny={getP,pick,sim:s=>{for(let i=0;i<s/H;i++)substep()},quality,EARS,state:()=>({floaty,rising,pet,squeeze,joy,grab:!!grab})};
+  requestAnimationFrame(frame);
+}
+init().catch(err=>{console.error(err);showFallback('Something went wrong starting her up: '+(err&&err.message||err))});
+})();
+</script>
+</body>
+</html>
